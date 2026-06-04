@@ -16,17 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-import torch
 import whisper
-
-
-def get_device() -> tuple[str, bool]:
-    """Return (device, use_fp16). MPS > CUDA > CPU."""
-    if torch.backends.mps.is_available():
-        return "mps", True
-    if torch.cuda.is_available():
-        return "cuda", True
-    return "cpu", False
 
 SUPPORTED_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv",
@@ -60,13 +50,13 @@ def find_media_files(folder: Path) -> list[Path]:
     return sorted(files)
 
 
-def transcribe_file(model, media_path: Path, language: str, fp16: bool) -> list[dict]:
+def transcribe_file(model, media_path: Path, language: str) -> list[dict]:
     try:
-        result = model.transcribe(str(media_path), language=language, fp16=fp16, verbose=False)
+        result = model.transcribe(str(media_path), language=language, fp16=False, verbose=False)
     except (ValueError, IndexError):
         # 'yue' token missing from some model weights — retry with auto-detect
         print(f"  Warning: language '{language}' not supported by this model; retrying with auto-detect.")
-        result = model.transcribe(str(media_path), fp16=fp16, verbose=False)
+        result = model.transcribe(str(media_path), fp16=False, verbose=False)
     return result["segments"]
 
 
@@ -78,9 +68,8 @@ def process_folder(input_folder: Path, output_folder: Path, model_name: str, lan
         print(f"No supported media files found in: {input_folder}")
         return
 
-    device, fp16 = get_device()
-    print(f"Loading Whisper model '{model_name}' on device: {device}")
-    model = whisper.load_model(model_name, device=device)
+    print(f"Loading Whisper model '{model_name}' on device: cpu")
+    model = whisper.load_model(model_name)
     print(f"Model loaded. Found {len(media_files)} file(s) to process.\n")
 
     succeeded, failed = 0, 0
@@ -90,11 +79,16 @@ def process_folder(input_folder: Path, output_folder: Path, model_name: str, lan
         srt_path = output_folder / rel.with_suffix(".srt")
         srt_path.parent.mkdir(parents=True, exist_ok=True)
 
+        if srt_path.exists():
+            print(f"[{i}/{len(media_files)}] Skipping (already done): {rel}\n")
+            succeeded += 1
+            continue
+
         print(f"[{i}/{len(media_files)}] {rel}")
         start_time = time.time()
 
         try:
-            segments = transcribe_file(model, media_path, language, fp16)
+            segments = transcribe_file(model, media_path, language)
             srt_content = segments_to_srt(segments)
             srt_path.write_text(srt_content, encoding="utf-8")
             elapsed = time.time() - start_time
